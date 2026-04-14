@@ -38,4 +38,64 @@ fn main() {
         embed_manifest(manifest).expect("unable to embed manifest");
     }
     println!("cargo:rerun-if-changed=build.rs");
+
+    embed_bazel_shim();
+}
+
+fn embed_bazel_shim() {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let shims_dir = std::path::PathBuf::from("src/commands/venv/shims");
+
+    let mut shim_entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+
+    for entry in std::fs::read_dir(&shims_dir).expect("read shims dir") {
+        let entry = entry.expect("read dir entry");
+        let name = entry.file_name().into_string().unwrap();
+        if let Some(rest) = name.strip_prefix("uv-bazel-shim-") {
+            let target = rest.strip_suffix(".exe").unwrap_or(rest);
+            shim_entries.push((target.to_string(), entry.path()));
+        }
+    }
+
+    if shim_entries.is_empty() {
+        panic!("No Bazel shim binaries found in {}", shims_dir.display());
+    }
+
+    let mut content = String::new();
+
+    for (target, path) in &shim_entries {
+        let var_name = format!(
+            "SHIM_BYTES_{}",
+            target.replace("-", "_").replace(".", "_").to_uppercase()
+        );
+        let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        content.push_str(&format!(
+            "pub(crate) static {}: &[u8] = include_bytes!(r#\"{}\"#);\n",
+            var_name,
+            abs_path.display()
+        ));
+    }
+
+    content.push_str("\npub(crate) fn select_shim(target: &str) -> Option<&'static [u8]> {\n");
+    content.push_str("    match target {\n");
+    for (target, _) in &shim_entries {
+        let var_name = format!(
+            "SHIM_BYTES_{}",
+            target.replace("-", "_").replace(".", "_").to_uppercase()
+        );
+        content.push_str(&format!(
+            "        \"{}\" => Some({}),\n",
+            target, var_name
+        ));
+    }
+    content.push_str("        _ => None,\n");
+    content.push_str("    }\n");
+    content.push_str("}\n");
+
+    let shim_bytes_rs = std::path::PathBuf::from(&out_dir).join("shim_bytes.rs");
+    std::fs::write(&shim_bytes_rs, content).expect("write shim_bytes.rs");
+
+    for (_, path) in &shim_entries {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
 }
