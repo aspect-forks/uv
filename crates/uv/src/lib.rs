@@ -1292,6 +1292,8 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
                         .is_enabled(PreviewFeature::RelocatableEnvsDefault)
                         && !args.no_relocatable),
                 globals.preview,
+                args.mode,
+                args.pth_manifest,
             )
             .await
         }
